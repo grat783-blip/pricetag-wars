@@ -605,31 +605,50 @@
 
   /* Mobile tweaks — ensure guess controls always visible without scrolling */
   @media (max-width: 600px) {
-    .screen { padding: 14px; }
-    #screen-game { padding: 10px; }
+    .screen { padding: 12px; }
+    #screen-game { padding: 8px; }
 
-    .game-top { margin-bottom: 8px; }
-    .round-pill { font-size: 11px; padding: 4px 10px; }
-    .timer-pill { font-size: 16px; padding: 4px 12px; min-width: 50px; }
+    .game-top { margin-bottom: 6px; }
+    .round-pill { font-size: 10px; padding: 4px 8px; }
+    .timer-pill { font-size: 14px; padding: 4px 10px; min-width: 44px; }
 
-    /* Smaller product card on mobile so the slider + button stay on screen */
-    .product-stage { margin-bottom: 12px; }
-    .product-image-wrap { aspect-ratio: 16 / 10; }
+    /* Product image sized by viewport height so it never crowds out the slider */
+    .product-stage { margin-bottom: 10px; }
+    .product-image-wrap {
+      aspect-ratio: auto;
+      height: 22vh;
+      min-height: 130px;
+      max-height: 220px;
+    }
+    .product-image-wrap img { width: 90%; height: 90%; }
     .product-title {
-      padding: 10px 14px;
-      font-size: clamp(14px, 4.2vw, 18px);
+      padding: 8px 12px;
+      font-size: clamp(13px, 4vw, 17px);
+      border-top-width: 3px;
     }
 
-    /* Tighter guess controls */
-    .guess-controls { padding: 14px; }
-    .guess-display { margin-bottom: 10px; }
-    .guess-label { font-size: 11px; }
-    .guess-amount { font-size: clamp(34px, 9vw, 50px); }
-    .slider-wrap { margin-bottom: 12px; padding: 0; }
+    /* Compact guess controls */
+    .guess-controls { padding: 12px; }
+    .guess-display { margin-bottom: 8px; }
+    .guess-label { font-size: 10px; }
+    .guess-amount { font-size: clamp(30px, 8vw, 44px); }
+    .slider-wrap { margin-bottom: 10px; padding: 0; }
+    input[type=range].chunky::-webkit-slider-thumb { width: 32px; height: 32px; margin-top: -12px; }
+    input[type=range].chunky::-moz-range-thumb { width: 32px; height: 32px; }
+    .lock-grid { margin-top: 10px; gap: 5px; }
+    .lock-chip { font-size: 11px; padding: 4px 8px; }
 
     /* Other screens */
     .lobby-card, .end-card { padding: 18px; }
     .price-reveal-amount { font-size: clamp(48px, 11vw, 80px); }
+    .product-stage::before { width: 14px; height: 14px; top: 12px; left: 12px; }
+  }
+
+  /* Tiny screens (iPhone SE etc.) — squeeze even more */
+  @media (max-width: 380px) {
+    .product-image-wrap { height: 18vh; min-height: 110px; }
+    .guess-amount { font-size: clamp(26px, 7vw, 38px); }
+    .btn { font-size: 16px; padding: 14px 20px; }
   }
 
   /* Mute toggle (fixed top-right) */
@@ -780,7 +799,7 @@ const USE_REMOTE_API = true;
 const ROUNDS_PER_MATCH = 5;
 const PHASE_TIMINGS = {
   countdown: 3000,
-  redacted:  12000,
+  redacted:  60000,   // 60s ceiling — round normally ends when all humans lock in (bots auto-lock by ~9s)
   reveal:    5000,
   scoring:   7000
 };
@@ -1510,10 +1529,14 @@ async function hostTick() {
     case 'redacted': {
       // Bots make guesses
       await tickBotsRedacted(room, elapsed);
-      // Check if all locked OR timer up
+      // Decide if phase should end early (everyone locked in) — but ONLY after
+      // a minimum grace period to avoid stale-state races at round start.
       const players = Object.values(room.players);
-      const allLocked = players.every(p => p.guess !== null);
-      if (allLocked || elapsed >= PHASE_TIMINGS.redacted) {
+      const everyoneLocked =
+        players.length > 0 &&
+        players.every(p => typeof p.guess === 'number');
+      const minPhaseTime = 2500;        // ms — never end before this
+      if ((everyoneLocked && elapsed >= minPhaseTime) || elapsed >= PHASE_TIMINGS.redacted) {
         await advancePhase('reveal');
       }
       break;
