@@ -1261,16 +1261,7 @@ function autoRedact(title) {
   }).join(' ');
 }
 
-// ----- FAKE PRODUCTS (trick rounds — closest-to-median wins) -----
-const FAKE_PRODUCTS = [
-  { asin: "FAKE0001", fullTitle: "Quantum Self Brushing Cat Comb Bluetooth", redactedTitle: "Quantum Self ▇▇▇▇▇▇▇▇ Cat Comb Bluetooth", emoji: "🐈", color: "#C77DFF", truePrice: 0, isFake: true },
-  { asin: "FAKE0002", fullTitle: "Battery Powered Self Folding Origami Crane", redactedTitle: "Battery ▇▇▇▇▇▇▇ Self Folding Origami Crane", emoji: "🕊️", color: "#FF1B6B", truePrice: 0, isFake: true },
-  { asin: "FAKE0003", fullTitle: "Ergonomic Vibrating Spaghetti Fork Twirler", redactedTitle: "Ergonomic ▇▇▇▇▇▇▇▇▇ Spaghetti Fork Twirler", emoji: "🍝", color: "#FF6B1A", truePrice: 0, isFake: true },
-  { asin: "FAKE0004", fullTitle: "Mini Disco Ball Plant Pot Decoration", redactedTitle: "Mini Disco Ball ▇▇▇▇▇ Pot Decoration", emoji: "🪩", color: "#5C2A9D", truePrice: 0, isFake: true },
-  { asin: "FAKE0005", fullTitle: "Edible Vanilla Flavored USB Cable", redactedTitle: "▇▇▇▇▇▇ Vanilla Flavored USB Cable", emoji: "🔌", color: "#FFE53B", truePrice: 0, isFake: true }
-];
-
-// ----- PRODUCT LOADING (live API + fake fallback) -----
+// ----- PRODUCT LOADING (live API only — every product is real) -----
 async function fetchProductsFromAPI() {
   try {
     const res = await fetch('https://dummyjson.com/products?limit=100&select=id,title,price,thumbnail,category');
@@ -1296,16 +1287,15 @@ async function fetchProductsFromAPI() {
 
 async function loadProducts() {
   if (USE_REMOTE_API) {
-    const apiProducts = await fetchProductsFromAPI();
-    return [...apiProducts, ...FAKE_PRODUCTS];
+    return await fetchProductsFromAPI();
   }
-  // Manual mode: load curated products.json
+  // Manual mode: load curated products.json (only used if USE_REMOTE_API is false)
   try {
     const res = await fetch('./products.json');
     return await res.json();
   } catch (e) {
     console.error('products.json failed', e);
-    return [...FAKE_PRODUCTS];
+    return [];
   }
 }
 
