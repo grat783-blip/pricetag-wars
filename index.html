@@ -732,6 +732,9 @@
   </div>
 </section>
 
+<!-- Load user config first (separate file so updates don't overwrite it) -->
+<script src="firebase-config.js"></script>
+
 <script type="module">
 // ============================================================
 //  PRICETAG WARS — full client
@@ -743,19 +746,10 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js';
 
 // ----- CONFIG -----
-// REPLACE THIS WITH YOUR FIREBASE CONFIG
-const firebaseConfig = {
-  apiKey:        "REPLACE_ME",
-  authDomain:    "REPLACE_ME.firebaseapp.com",
-  databaseURL:   "https://REPLACE_ME-default-rtdb.firebaseio.com",
-  projectId:     "REPLACE_ME",
-  storageBucket: "REPLACE_ME.appspot.com",
-  messagingSenderId: "REPLACE_ME",
-  appId: "REPLACE_ME"
-};
-
-// REPLACE WITH YOUR AMAZON ASSOCIATES TAG
-const AMAZON_TAG = "yourtag-20";
+// All user-editable config lives in firebase-config.js (loaded above).
+// Edit that file once with your Firebase + Amazon settings; never edit this block.
+const firebaseConfig = (window.PW_CONFIG && window.PW_CONFIG.firebase) || null;
+const AMAZON_TAG     = (window.PW_CONFIG && window.PW_CONFIG.amazonTag) || "yourtag-20";
 
 // Set to true (default) for auto-loaded random products from a free public API.
 // Set to false to use ./products.json (manual curation, edit the file yourself).
@@ -772,11 +766,19 @@ const ROOM_FILL_BOTS_AFTER_MS = 25000;
 
 // ----- FIREBASE INIT -----
 let app, db;
-try {
-  app = initializeApp(firebaseConfig);
-  db  = getDatabase(app);
-} catch (e) {
-  console.warn("Firebase init failed — running in offline preview mode", e);
+function isPlaceholderConfig(cfg) {
+  if (!cfg || !cfg.apiKey) return true;
+  return String(cfg.apiKey).includes('REPLACE_ME');
+}
+if (!isPlaceholderConfig(firebaseConfig)) {
+  try {
+    app = initializeApp(firebaseConfig);
+    db  = getDatabase(app);
+  } catch (e) {
+    console.warn("Firebase init failed", e);
+  }
+} else {
+  console.warn("⚠ Firebase config not set. Edit firebase-config.js with your real Firebase project values, then refresh.");
 }
 
 // ----- STATE -----
@@ -1269,7 +1271,7 @@ async function loadProducts() {
 async function onCreateRoom() {
   const name = qs('input-name').value.trim();
   if (!name) { showError('title', 'Pick a name first'); return; }
-  if (!db)   { showError('title', 'Firebase not configured — see README.md'); return; }
+  if (!db)   { showError('title', 'Firebase not set — edit firebase-config.js with your project values'); return; }
   clearError('title');
   state.name = name;
   localStorage.setItem('pw_name', name);
@@ -1318,7 +1320,7 @@ async function onJoinRoom() {
   const code = qs('input-code').value.trim().toUpperCase();
   if (!name) { showError('title', 'Pick a name first'); return; }
   if (!code || code.length !== 4) { showError('title', 'Enter a 4-character code'); return; }
-  if (!db)   { showError('title', 'Firebase not configured — see README.md'); return; }
+  if (!db)   { showError('title', 'Firebase not set — edit firebase-config.js with your project values'); return; }
   clearError('title');
 
   const snap = await get(ref(db, `rooms/${code}`));
