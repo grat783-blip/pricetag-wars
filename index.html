@@ -603,11 +603,33 @@
     text-align: center;
   }
 
-  /* Mobile tweaks */
+  /* Mobile tweaks — ensure guess controls always visible without scrolling */
   @media (max-width: 600px) {
-    .lobby-card, .end-card { padding: 20px; }
-    .product-title { padding: 14px 16px; }
-    .guess-controls { padding: 16px; }
+    .screen { padding: 14px; }
+    #screen-game { padding: 10px; }
+
+    .game-top { margin-bottom: 8px; }
+    .round-pill { font-size: 11px; padding: 4px 10px; }
+    .timer-pill { font-size: 16px; padding: 4px 12px; min-width: 50px; }
+
+    /* Smaller product card on mobile so the slider + button stay on screen */
+    .product-stage { margin-bottom: 12px; }
+    .product-image-wrap { aspect-ratio: 16 / 10; }
+    .product-title {
+      padding: 10px 14px;
+      font-size: clamp(14px, 4.2vw, 18px);
+    }
+
+    /* Tighter guess controls */
+    .guess-controls { padding: 14px; }
+    .guess-display { margin-bottom: 10px; }
+    .guess-label { font-size: 11px; }
+    .guess-amount { font-size: clamp(34px, 9vw, 50px); }
+    .slider-wrap { margin-bottom: 12px; padding: 0; }
+
+    /* Other screens */
+    .lobby-card, .end-card { padding: 18px; }
+    .price-reveal-amount { font-size: clamp(48px, 11vw, 80px); }
   }
 
   /* Mute toggle (fixed top-right) */
