@@ -1595,7 +1595,7 @@ async function tickBotsRedacted(room, elapsed, force = false) {
   // Each bot has a target lock time in [5500, 9500] ms based on a hash of its uid.
   // If `force` is true (all humans already locked), bots lock immediately.
   for (const [uid, p] of Object.entries(room.players)) {
-    if (!p.isBot || p.guess !== null) continue;
+    if (!p.isBot || typeof p.guess === 'number') continue;
     if (state.botsLocked.has(uid)) continue;  // already wrote this round, awaiting echo
     const seed = parseInt(uid.replace(/\D/g,'').slice(0,6) || '1', 10);
     const lockAt = 5500 + (seed % 4000);   // bots lock between 5.5s and 9.5s
@@ -1663,27 +1663,27 @@ function computeRoundScores(room, product) {
 
   if (product.isFake) {
     // Beauty-contest mode: closest to median
-    const guesses = players.map(([_, p]) => p.guess).filter(g => g !== null).sort((a,b)=>a-b);
+    const guesses = players.map(([_, p]) => p.guess).filter(g => typeof g === 'number').sort((a,b)=>a-b);
     if (guesses.length === 0) {
       players.forEach(([uid]) => result[uid] = 0);
       return result;
     }
     const median = guesses[Math.floor(guesses.length / 2)];
     const ranked = players
-      .filter(([_, p]) => p.guess !== null)
+      .filter(([_, p]) => typeof p.guess === 'number')
       .map(([uid, p]) => ({ uid, dist: Math.abs(p.guess - median), lockedAt: p.lockedAt }))
       .sort((a,b) => a.dist - b.dist || a.lockedAt - b.lockedAt);
     ranked.forEach((r, i) => {
       const base = i === 0 ? 100 : i === 1 ? 60 : i === 2 ? 30 : 10;
       result[r.uid] = base;
     });
-    players.forEach(([uid, p]) => { if (p.guess === null) result[uid] = 0; });
+    players.forEach(([uid, p]) => { if (typeof p.guess !== 'number') result[uid] = 0; });
     return result;
   }
 
   // Standard: closest WITHOUT going over (Price Is Right)
   const valid = players
-    .filter(([_, p]) => p.guess !== null && p.guess <= product.truePrice)
+    .filter(([_, p]) => typeof p.guess === 'number' && p.guess <= product.truePrice)
     .map(([uid, p]) => ({ uid, p, diff: product.truePrice - p.guess }))
     .sort((a, b) => a.diff - b.diff || a.p.lockedAt - b.p.lockedAt);
 
@@ -1799,7 +1799,7 @@ function renderLockGrid(room) {
   grid.innerHTML = '';
   Object.entries(room.players).forEach(([uid, p]) => {
     const chip = document.createElement('span');
-    chip.className = 'lock-chip' + (p.guess !== null ? ' locked' : '');
+    chip.className = 'lock-chip' + (typeof p.guess === 'number' ? ' locked' : '');
     chip.textContent = uid === state.uid ? 'You' : p.name.replace(' 🤖','');
     grid.appendChild(chip);
   });
@@ -1813,7 +1813,7 @@ function renderScoreTable(room, product) {
   const rows = Object.entries(room.players).map(([uid, p]) => ({
     uid, p,
     points: scoresThisRound[uid] || 0,
-    bust: !product.isFake && p.guess !== null && p.guess > product.truePrice
+    bust: !product.isFake && typeof p.guess === 'number' && p.guess > product.truePrice
   })).sort((a,b) => b.points - a.points);
 
   rows.forEach((r, i) => {
@@ -1821,7 +1821,7 @@ function renderScoreTable(room, product) {
     row.className = 'score-row';
     if (i === 0 && r.points > 0) row.classList.add('winner');
     if (r.bust) row.classList.add('bust');
-    const guessText = r.p.guess === null ? '— skipped' : `$${r.p.guess}`;
+    const guessText = typeof r.p.guess !== 'number' ? '— skipped' : `$${r.p.guess}`;
     const pointsText = r.bust ? 'BUST' : (r.points > 0 ? `+${r.points}` : '0');
     row.innerHTML = `
       <span class="score-rank">${i+1}</span>
