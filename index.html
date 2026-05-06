@@ -346,8 +346,9 @@
     transition: filter 0.6s, transform 0.6s;
   }
   .product-image-wrap.blurred img {
-    filter: blur(28px) brightness(0.85);
-    transform: scale(1.1);
+    /* Blur disabled — game's anti-cheat is the redacted title alone, image stays sharp */
+    filter: none;
+    transform: none;
   }
   .spotlight {
     position: absolute;
@@ -357,7 +358,7 @@
     opacity: 0;
     transition: opacity 0.4s;
   }
-  .product-image-wrap.blurred .spotlight { opacity: 1; }
+  .product-image-wrap.blurred .spotlight { opacity: 0; }
 
   .product-title {
     font-family: 'Bungee', sans-serif;
@@ -1527,15 +1528,23 @@ async function hostTick() {
       break;
 
     case 'redacted': {
-      // Bots make guesses
-      await tickBotsRedacted(room, elapsed);
-      // Decide if phase should end early (everyone locked in) — but ONLY after
-      // a minimum grace period to avoid stale-state races at round start.
-      const players = Object.values(room.players);
+      // Are all humans locked in? If yes, fast-forward the bots so the round can end.
+      const playerEntries = Object.entries(room.players);
+      const humans = playerEntries.filter(([_, p]) => !p.isBot);
+      const allHumansLocked =
+        humans.length > 0 &&
+        humans.every(([_, p]) => typeof p.guess === 'number');
+
+      // Tick bots: pass force=true once all humans have locked in
+      await tickBotsRedacted(room, elapsed, allHumansLocked);
+
+      // Decide if phase should end (everyone locked in OR time's up).
+      // 2.5s minimum grace period prevents stale-state races at round start.
+      const players = playerEntries.map(([_, p]) => p);
       const everyoneLocked =
         players.length > 0 &&
         players.every(p => typeof p.guess === 'number');
-      const minPhaseTime = 2500;        // ms — never end before this
+      const minPhaseTime = 2500;
       if ((everyoneLocked && elapsed >= minPhaseTime) || elapsed >= PHASE_TIMINGS.redacted) {
         await advancePhase('reveal');
       }
@@ -1582,14 +1591,15 @@ async function advanceToRedacted() {
   await update(ref(db, `rooms/${state.roomCode}`), updates);
 }
 
-async function tickBotsRedacted(room, elapsed) {
-  // Each bot has a target lock time in [1500, 7000] ms based on a hash of its uid
+async function tickBotsRedacted(room, elapsed, force = false) {
+  // Each bot has a target lock time in [5500, 9500] ms based on a hash of its uid.
+  // If `force` is true (all humans already locked), bots lock immediately.
   for (const [uid, p] of Object.entries(room.players)) {
     if (!p.isBot || p.guess !== null) continue;
     if (state.botsLocked.has(uid)) continue;  // already wrote this round, awaiting echo
     const seed = parseInt(uid.replace(/\D/g,'').slice(0,6) || '1', 10);
-    const lockAt = 5500 + (seed % 4000);   // bots lock between 5.5s and 9.5s — gives humans time
-    if (elapsed >= lockAt) {
+    const lockAt = 5500 + (seed % 4000);   // bots lock between 5.5s and 9.5s
+    if (force || elapsed >= lockAt) {
       // Make a plausible guess: random in $5..$120, biased a bit
       const product = state.products[room.productIndex];
       let guess;
@@ -1888,23 +1898,22 @@ function renderEnd(room) {
 async function onPlayAgain() {
   if (!state.roomData) return;
   const newOrder = shuffleArray(state.products.map((_, i) => i));
+  // Keep ALL existing players (humans AND bots) — same lineup, fresh match
   const updates = {
-    phase: 'lobby',
+    phase: 'countdown',          // skip lobby — go straight into a new match
     phaseStartedAt: Date.now(),
     roundIndex: 0,
     productOrder: newOrder,
     productIndex: newOrder[0]
   };
-  // Reset all player scores; remove bots
-  for (const [uid, p] of Object.entries(state.roomData.players)) {
-    if (p.isBot) {
-      updates[`players/${uid}`] = null;
-    } else {
-      updates[`players/${uid}/score`]    = 0;
-      updates[`players/${uid}/guess`]    = null;
-      updates[`players/${uid}/lockedAt`] = null;
-    }
+  // Reset every player's score & per-round state
+  for (const uid of Object.keys(state.roomData.players)) {
+    updates[`players/${uid}/score`]    = 0;
+    updates[`players/${uid}/guess`]    = null;
+    updates[`players/${uid}/lockedAt`] = null;
   }
+  // Clear local bot-lock cache too
+  state.botsLocked.clear();
   await update(ref(db, `rooms/${state.roomCode}`), updates);
 }
 
