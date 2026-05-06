@@ -609,14 +609,39 @@
     .product-title { padding: 14px 16px; }
     .guess-controls { padding: 16px; }
   }
+
+  /* Mute toggle (fixed top-right) */
+  .mute-toggle {
+    position: fixed;
+    top: 14px; right: 14px;
+    width: 44px; height: 44px;
+    background: var(--bg-2);
+    border: 3px solid var(--cream);
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    z-index: 100;
+    box-shadow: 3px 3px 0 var(--ink);
+    transition: transform 0.1s;
+    color: var(--cream);
+    user-select: none;
+  }
+  .mute-toggle:hover { transform: scale(1.05); }
+  .mute-toggle:active { transform: scale(0.92); }
+  body.muted .mute-toggle { opacity: 0.5; }
 </style>
 </head>
 <body>
 
+<button id="mute-toggle" class="mute-toggle" title="Toggle sound" aria-label="Toggle sound">🔊</button>
+
 <!-- ============ TITLE SCREEN ============ -->
 <section id="screen-title" class="screen active">
   <h1 class="logo">PRICE<span class="ampersand">$</span>TAG<br>WAR$</h1>
-  <p class="tagline">Guess the Wildest Stuff Online</p>
+  <p class="tagline">Real Products · Wild Prices · 60 Second Rounds</p>
 
   <div class="name-input-row">
     <div id="error-title"></div>
@@ -720,24 +745,28 @@ import {
 // ----- CONFIG -----
 // REPLACE THIS WITH YOUR FIREBASE CONFIG
 const firebaseConfig = {
-  apiKey: "AIzaSyDoAhW5wF2KUmT7-7w-TypOudfx2CDHtsw",
-  authDomain: "pricetag-wars.firebaseapp.com",
-  databaseURL: "https://pricetag-wars-default-rtdb.firebaseio.com",
-  projectId: "pricetag-wars",
-  storageBucket: "pricetag-wars.appspot.com",
-  messagingSenderId: "71945708079",
-  appId: "1:71945708079:web:40397719846ea370a25cda"
+  apiKey:        "REPLACE_ME",
+  authDomain:    "REPLACE_ME.firebaseapp.com",
+  databaseURL:   "https://REPLACE_ME-default-rtdb.firebaseio.com",
+  projectId:     "REPLACE_ME",
+  storageBucket: "REPLACE_ME.appspot.com",
+  messagingSenderId: "REPLACE_ME",
+  appId: "REPLACE_ME"
 };
 
 // REPLACE WITH YOUR AMAZON ASSOCIATES TAG
 const AMAZON_TAG = "yourtag-20";
 
+// Set to true (default) for auto-loaded random products from a free public API.
+// Set to false to use ./products.json (manual curation, edit the file yourself).
+const USE_REMOTE_API = true;
+
 const ROUNDS_PER_MATCH = 5;
 const PHASE_TIMINGS = {
   countdown: 3000,
-  redacted:  8000,
-  reveal:    4000,
-  scoring:   5500
+  redacted:  12000,
+  reveal:    5000,
+  scoring:   7000
 };
 const ROOM_FILL_BOTS_AFTER_MS = 25000;
 
@@ -764,20 +793,269 @@ const state = {
   joinedAt:       null,
   guessLocked:    false,
   lastSeenPhase:  null,
-  botsLocked:     new Set()      // bot UIDs already guessed this round (prevents Firebase-echo races)
+  botsLocked:     new Set(),     // bot UIDs already guessed this round (prevents Firebase-echo races)
+  lastSoundSec:   null,          // tracks last second a phase-tick sound played
+  lastSliderVal:  25             // throttle slider tick sound
+};
+
+// ----- AUDIO (procedural synthesis via Web Audio API) -----
+// One-time mute reset on this version (so users who accidentally muted hear sound)
+if (localStorage.getItem('pw_audio_v') !== '2') {
+  localStorage.removeItem('pw_muted');
+  localStorage.setItem('pw_audio_v', '2');
+}
+
+const Audio = {
+  ctx: null,
+  muted: localStorage.getItem('pw_muted') === '1',
+  enabled: true,
+
+  init() {
+    if (this.ctx) return;
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      this.enabled = false;
+      console.warn('Web Audio not available', e);
+    }
+  },
+
+  ensureRunning() {
+    if (!this.ctx) this.init();
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+  },
+
+  setMuted(m) {
+    this.muted = m;
+    localStorage.setItem('pw_muted', m ? '1' : '0');
+    document.body.classList.toggle('muted', m);
+    const btn = document.getElementById('mute-toggle');
+    if (btn) btn.textContent = m ? '🔇' : '🔊';
+    if (typeof Music !== 'undefined') Music.setMuted(m);
+  },
+
+  // === Primitives ===
+
+  tone({freq=440, duration=0.1, type='sine', gain=0.15, attack=0.005, release=0.05, when=0}) {
+    if (this.muted || !this.ctx) return;
+    const t = this.ctx.currentTime + when;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.frequency.setValueAtTime(freq, t);
+    osc.type = type;
+    osc.connect(g);
+    g.connect(this.ctx.destination);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + attack);
+    g.gain.setValueAtTime(gain, t + Math.max(attack, duration - release));
+    g.gain.linearRampToValueAtTime(0, t + duration);
+    osc.start(t);
+    osc.stop(t + duration + 0.05);
+  },
+
+  sweep({fromFreq=200, toFreq=800, duration=0.3, type='sine', gain=0.15, when=0}) {
+    if (this.muted || !this.ctx) return;
+    const t = this.ctx.currentTime + when;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(fromFreq, t);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(1, toFreq), t + duration);
+    osc.connect(g);
+    g.connect(this.ctx.destination);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + 0.01);
+    g.gain.linearRampToValueAtTime(0, t + duration);
+    osc.start(t);
+    osc.stop(t + duration + 0.05);
+  },
+
+  noiseBurst({duration=0.05, gain=0.1, filterFreq=2000, filterType='highpass', when=0}) {
+    if (this.muted || !this.ctx) return;
+    const t = this.ctx.currentTime + when;
+    const bufSize = Math.max(1, Math.floor(this.ctx.sampleRate * duration));
+    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = filterType;
+    filter.frequency.value = filterFreq;
+    const g = this.ctx.createGain();
+    src.connect(filter); filter.connect(g); g.connect(this.ctx.destination);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + 0.005);
+    g.gain.linearRampToValueAtTime(0, t + duration);
+    src.start(t);
+    src.stop(t + duration + 0.05);
+  },
+
+  // === Named effects ===
+
+  click() { this.tone({freq: 700, duration: 0.05, type: 'square', gain: 0.10}); },
+  hoverTick() { this.tone({freq: 1100, duration: 0.018, type: 'square', gain: 0.04}); },
+  sliderTick() { this.tone({freq: 1100, duration: 0.018, type: 'square', gain: 0.04}); },
+
+  lockIn() {
+    // 3-note rising chunky blip
+    this.tone({freq: 392, duration: 0.07, type: 'square', gain: 0.10, when: 0});
+    this.tone({freq: 523, duration: 0.07, type: 'square', gain: 0.10, when: 0.07});
+    this.tone({freq: 784, duration: 0.20, type: 'triangle', gain: 0.13, when: 0.14, release: 0.15});
+  },
+
+  countdownBeep() {
+    this.tone({freq: 880, duration: 0.10, type: 'square', gain: 0.10});
+  },
+
+  urgentTick() {
+    // Sharp "tick" — noise + high tone
+    this.noiseBurst({duration: 0.025, gain: 0.05, filterFreq: 4000, filterType: 'highpass'});
+    this.tone({freq: 1500, duration: 0.025, type: 'square', gain: 0.04});
+  },
+
+  reveal() {
+    // Curtain pull — rising sweep + air whoosh
+    this.sweep({fromFreq: 180, toFreq: 1100, duration: 0.40, type: 'sine', gain: 0.11});
+    this.noiseBurst({duration: 0.20, gain: 0.04, filterFreq: 2500, filterType: 'bandpass'});
+  },
+
+  kaChing() {
+    // Bell-like overtones — cash register vibe
+    this.noiseBurst({duration: 0.03, gain: 0.04, filterFreq: 6000});
+    this.tone({freq: 1047, duration: 0.55, type: 'sine', gain: 0.10, release: 0.45});
+    this.tone({freq: 1319, duration: 0.55, type: 'sine', gain: 0.07, release: 0.45, when: 0.02});
+    this.tone({freq: 1568, duration: 0.55, type: 'sine', gain: 0.05, release: 0.45, when: 0.04});
+  },
+
+  matchEnd() {
+    // Big rising fanfare — C E G C E G
+    const notes = [523, 659, 784, 1047, 1319, 1568];
+    notes.forEach((f, i) => {
+      this.tone({freq: f,     duration: 0.16, type: 'square',   gain: 0.09, when: i * 0.09});
+      this.tone({freq: f / 2, duration: 0.45, type: 'sine',     gain: 0.05, when: i * 0.09, release: 0.35});
+    });
+  }
+};
+Audio.setMuted(Audio.muted); // sync UI with persisted state on load
+
+// ----- MUSIC ENGINE (procedural background loops) -----
+// Note frequencies (C major) — same scale across both tracks for cohesion
+const N = {
+  C2: 65.41, D2: 73.42, E2: 82.41, F2: 87.31, G2: 98.00, A2: 110.00, B2: 123.47,
+  C3: 130.81, E3: 164.81, F3: 174.61, G3: 196.00, A3: 220.00,
+  C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.00, A4: 440.00, B4: 493.88,
+  C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, B5: 987.77,
+  C6: 1046.50
+};
+
+const TRACKS = {
+  // Title screen: bouncy game-show theme. C major, 120 BPM. I-V-vi-IV (C-G-Am-F).
+  title: {
+    bpm: 120,
+    pattern(step, m) {
+      const s = step % 16; // 16 8th-notes = 2 bars
+      // Bass on every beat (every 2 8th-notes)
+      const bass = [N.C2, N.C2, N.G2, N.G2, N.A2, N.A2, N.F2, N.F2];
+      if (s % 2 === 0) m.note(bass[s / 2], 0.22, 'square', 0.32);
+      // Sparkle melody
+      const mel = [N.E5, 0, 0, N.G5, 0, N.E5, 0, 0,
+                   N.A5, 0, 0, N.G5, 0, N.E5, 0, N.C5];
+      if (mel[s]) m.note(mel[s], 0.18, 'triangle', 0.22);
+      // Octave bell on bar 1
+      if (s === 0) m.note(N.C6, 0.5, 'sine', 0.10);
+    }
+  },
+  // Lobby: chill version. Same key (C major), slower (80 BPM), softer waveforms.
+  lobby: {
+    bpm: 80,
+    pattern(step, m) {
+      const s = step % 32; // 32 8th-notes = 4 bars
+      // Long sustained bass — one note per bar
+      const bass = [N.C3, N.A3, N.F3, N.G3];
+      if (s % 8 === 0) m.note(bass[s / 8], 1.4, 'sine', 0.22);
+      // Gentle chord stab on beat 3 of each bar
+      if (s % 8 === 4) {
+        const third = [N.E4, N.C4, N.A4, N.B4][Math.floor(s / 8)];
+        m.note(third, 0.5, 'triangle', 0.13);
+      }
+      // Twinkle every 4 bars
+      if (s === 28) m.note(N.G5, 0.35, 'sine', 0.10);
+    }
+  }
+};
+
+const Music = {
+  current: null,
+  step: 0,
+  intervalId: null,
+  gain: null,
+
+  ensureGain() {
+    if (this.gain || !Audio.ctx) return;
+    this.gain = Audio.ctx.createGain();
+    this.gain.gain.value = Audio.muted ? 0 : 0.06; // quiet — well below SFX
+    this.gain.connect(Audio.ctx.destination);
+  },
+
+  play(trackName) {
+    if (!Audio.ctx) return; // not unlocked yet — will be retried on first interaction
+    this.ensureGain();
+    if (!this.gain) return;
+    if (this.current === trackName) return;
+    this.stop();
+    this.current = trackName;
+    this.step = 0;
+    const track = TRACKS[trackName];
+    if (!track) return;
+    const stepMs = 60000 / track.bpm / 2; // 8th notes
+    this.intervalId = setInterval(() => this.tick(), stepMs);
+    this.tick(); // play first step immediately
+  },
+
+  stop() {
+    if (this.intervalId) clearInterval(this.intervalId);
+    this.intervalId = null;
+    this.current = null;
+  },
+
+  tick() {
+    if (!this.current || !this.gain || !Audio.ctx) return;
+    TRACKS[this.current].pattern(this.step, this);
+    this.step++;
+  },
+
+  note(freq, dur, type, vol) {
+    if (!this.gain || !Audio.ctx) return;
+    const t = Audio.ctx.currentTime;
+    const o = Audio.ctx.createOscillator();
+    const g = Audio.ctx.createGain();
+    o.type = type || 'triangle';
+    o.frequency.setValueAtTime(freq, t);
+    o.connect(g);
+    g.connect(this.gain);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol || 0.25, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  },
+
+  setMuted(m) {
+    if (this.gain) this.gain.gain.value = m ? 0 : 0.06;
+  }
 };
 
 // ----- BOOT -----
 async function boot() {
-  // Load product catalog
-  try {
-    const res = await fetch('./products.json');
-    state.products = await res.json();
-  } catch (e) {
-    showError('title', 'Could not load products.json — check the file is hosted alongside index.html');
-    console.error(e);
+  // Load product catalog (API by default, with fake-product fallback)
+  state.products = await loadProducts();
+
+  if (state.products.length < 5) {
+    showError('title', 'Could not load any products. Check your internet connection and refresh.');
     return;
   }
+  console.log(`✓ Loaded ${state.products.length} products (${USE_REMOTE_API ? 'API' : 'local'})`);
 
   // URL room code support: ?room=ABCD
   const url = new URL(location.href);
@@ -812,7 +1090,38 @@ function bindUI() {
 
   qs('slider').oninput = (e) => {
     qs('guess-value').textContent = e.target.value;
+    const v = parseInt(e.target.value, 10);
+    if (Math.abs(v - state.lastSliderVal) >= 4) {
+      Audio.sliderTick();
+      state.lastSliderVal = v;
+    }
   };
+
+  // Mute toggle
+  qs('mute-toggle').onclick = () => {
+    Audio.ensureRunning();
+    const newMuted = !Audio.muted;
+    Audio.setMuted(newMuted);
+    if (!newMuted) Audio.click();   // confirm sound after unmuting
+  };
+
+  // Global click feedback (skip lock button — it has its own sound, and skip mute)
+  document.body.addEventListener('click', (e) => {
+    Audio.ensureRunning();           // unlocks audio context on first interaction
+    // If audio just unlocked and music hasn't started, kick it off for current screen
+    if (Music.current === null && !Audio.muted) {
+      const active = document.querySelector('.screen.active');
+      if (active) {
+        const id = active.id;
+        if (id === 'screen-title' || id === 'screen-end') Music.play('title');
+        else if (id === 'screen-lobby')                   Music.play('lobby');
+      }
+    }
+    const btn = e.target.closest('.btn');
+    if (btn && btn.id !== 'btn-lock' && btn.id !== 'mute-toggle') {
+      Audio.click();
+    }
+  });
 
   qs('input-code').addEventListener('input', e => {
     e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,4);
@@ -828,6 +1137,10 @@ function qs(id) { return document.getElementById(id); }
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   qs('screen-' + name).classList.add('active');
+  // Music switches by screen — silence during gameplay, theme on title/end, lobby loop in lobby
+  if (name === 'title' || name === 'end') Music.play('title');
+  else if (name === 'lobby')              Music.play('lobby');
+  else                                    Music.stop();
 }
 function showError(screen, msg) {
   const c = qs('error-' + screen);
@@ -865,8 +1178,89 @@ function placeholderImage(emoji, color) {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
 }
 
-function buildAffiliateUrl(asin) {
-  return `https://www.amazon.com/dp/${asin}?tag=${AMAZON_TAG}`;
+function buildAffiliateUrl(product) {
+  if (!product || product.isFake) return '#';
+  // Real Amazon ASIN format (B0XXXXXXXX) → product page
+  if (product.asin && /^B0[A-Z0-9]{8}$/.test(product.asin)) {
+    return `https://www.amazon.com/dp/${product.asin}?tag=${AMAZON_TAG}`;
+  }
+  // Otherwise (API products, fakes) → Amazon search
+  const query = encodeURIComponent(product.fullTitle);
+  return `https://www.amazon.com/s?k=${query}&tag=${AMAZON_TAG}`;
+}
+
+// ----- AUTO-REDACT (turns "Red Lipstick" into "Red ▇▇▇▇▇") -----
+function autoRedact(title) {
+  const stopwords = new Set(['the','a','an','and','or','but','for','with','of','in','on','at','to','from','by','is','are','my','our']);
+  const words = title.split(/\s+/);
+
+  // Find substantial words: 4+ letters, not numeric, not stopword
+  const redactableIdx = [];
+  words.forEach((w, i) => {
+    const cleaned = w.toLowerCase().replace(/[^a-z]/g,'');
+    if (cleaned.length >= 4 && !stopwords.has(cleaned) && !/\d/.test(w)) {
+      redactableIdx.push(i);
+    }
+  });
+  if (redactableIdx.length === 0) return title;
+
+  // Redact ~60% of substantial words, prefer earlier (more distinctive) words
+  const numToRedact = Math.max(1, Math.ceil(redactableIdx.length * 0.6));
+  const toRedact = new Set(redactableIdx.slice(0, numToRedact));
+
+  return words.map((word, i) => {
+    if (!toRedact.has(i)) return word;
+    const cleaned = word.toLowerCase().replace(/[^a-z]/g,'');
+    return '▇'.repeat(Math.min(cleaned.length, 5));
+  }).join(' ');
+}
+
+// ----- FAKE PRODUCTS (trick rounds — closest-to-median wins) -----
+const FAKE_PRODUCTS = [
+  { asin: "FAKE0001", fullTitle: "Quantum Self Brushing Cat Comb Bluetooth", redactedTitle: "Quantum Self ▇▇▇▇▇▇▇▇ Cat Comb Bluetooth", emoji: "🐈", color: "#C77DFF", truePrice: 0, isFake: true },
+  { asin: "FAKE0002", fullTitle: "Battery Powered Self Folding Origami Crane", redactedTitle: "Battery ▇▇▇▇▇▇▇ Self Folding Origami Crane", emoji: "🕊️", color: "#FF1B6B", truePrice: 0, isFake: true },
+  { asin: "FAKE0003", fullTitle: "Ergonomic Vibrating Spaghetti Fork Twirler", redactedTitle: "Ergonomic ▇▇▇▇▇▇▇▇▇ Spaghetti Fork Twirler", emoji: "🍝", color: "#FF6B1A", truePrice: 0, isFake: true },
+  { asin: "FAKE0004", fullTitle: "Mini Disco Ball Plant Pot Decoration", redactedTitle: "Mini Disco Ball ▇▇▇▇▇ Pot Decoration", emoji: "🪩", color: "#5C2A9D", truePrice: 0, isFake: true },
+  { asin: "FAKE0005", fullTitle: "Edible Vanilla Flavored USB Cable", redactedTitle: "▇▇▇▇▇▇ Vanilla Flavored USB Cable", emoji: "🔌", color: "#FFE53B", truePrice: 0, isFake: true }
+];
+
+// ----- PRODUCT LOADING (live API + fake fallback) -----
+async function fetchProductsFromAPI() {
+  try {
+    const res = await fetch('https://dummyjson.com/products?limit=100&select=id,title,price,thumbnail,category');
+    if (!res.ok) throw new Error('API status ' + res.status);
+    const data = await res.json();
+    return (data.products || [])
+      .filter(p => p.price > 0 && p.price <= 200 && p.title && p.thumbnail)
+      .sort((a, b) => a.id - b.id)
+      .map(p => ({
+        asin: 'P' + p.id,
+        fullTitle: p.title,
+        redactedTitle: autoRedact(p.title),
+        imageUrl: p.thumbnail,
+        truePrice: Math.round(p.price * 100) / 100,
+        category: p.category,
+        isFake: false
+      }));
+  } catch (e) {
+    console.warn('Product API fetch failed, using fakes only:', e);
+    return [];
+  }
+}
+
+async function loadProducts() {
+  if (USE_REMOTE_API) {
+    const apiProducts = await fetchProductsFromAPI();
+    return [...apiProducts, ...FAKE_PRODUCTS];
+  }
+  // Manual mode: load curated products.json
+  try {
+    const res = await fetch('./products.json');
+    return await res.json();
+  } catch (e) {
+    console.error('products.json failed', e);
+    return [...FAKE_PRODUCTS];
+  }
 }
 
 // ----- ROOM CREATION / JOIN -----
@@ -1145,7 +1539,7 @@ async function tickBotsRedacted(room, elapsed) {
     if (!p.isBot || p.guess !== null) continue;
     if (state.botsLocked.has(uid)) continue;  // already wrote this round, awaiting echo
     const seed = parseInt(uid.replace(/\D/g,'').slice(0,6) || '1', 10);
-    const lockAt = 1500 + (seed % 5500);
+    const lockAt = 5500 + (seed % 4000);   // bots lock between 5.5s and 9.5s — gives humans time
     if (elapsed >= lockAt) {
       // Make a plausible guess: random in $5..$120, biased a bit
       const product = state.products[room.productIndex];
@@ -1237,7 +1631,7 @@ function computeRoundScores(room, product) {
   valid.forEach((entry, i) => {
     const phaseStart = room.phaseStartedAt;
     const speedSec = (entry.p.lockedAt - phaseStart) / 1000;
-    const speedMult = speedSec < 4 ? 2 : speedSec < 6 ? 1.5 : 1;
+    const speedMult = speedSec < 6 ? 2 : speedSec < 9 ? 1.5 : 1;
     const basePoints = i === 0 ? 100 : i === 1 ? 60 : i === 2 ? 30 : 10;
     result[entry.uid] = Math.round(basePoints * speedMult);
   });
@@ -1256,8 +1650,9 @@ async function onLockGuess() {
   if (state.guessLocked) return;
   const guess = parseInt(qs('slider').value, 10);
   state.guessLocked = true;
+  Audio.lockIn();
   qs('btn-lock').disabled = true;
-  qs('btn-lock').textContent = 'LOCKED';
+  qs('btn-lock').textContent = '✓ LOCKED — WAITING';
   qs('slider').disabled = true;
   await update(ref(db, `rooms/${state.roomCode}/players/${state.uid}`), {
     guess, lockedAt: Date.now()
@@ -1270,8 +1665,8 @@ function renderGame(room) {
   qs('round-pill').textContent = `ROUND ${room.roundIndex + 1}/${ROUNDS_PER_MATCH}`;
   const product = state.products[room.productIndex];
 
-  // Image with placeholder if no real one
-  qs('product-image').src = placeholderImage(product.emoji, product.color);
+  // Real image when API provides one, emoji placeholder for fakes/curated
+  qs('product-image').src = product.imageUrl || placeholderImage(product.emoji, product.color);
 
   // Phase-specific UI
   const phaseChanged = state.lastSeenPhase !== room.phase;
@@ -1280,12 +1675,15 @@ function renderGame(room) {
   // Reset states on new round
   if (phaseChanged && room.phase === 'redacted') {
     state.guessLocked = false;
+    state.lastSoundSec = null;
+    state.lastSliderVal = 25;
     qs('btn-lock').disabled = false;
     qs('btn-lock').textContent = 'Lock In';
     qs('slider').disabled = false;
     qs('slider').value = 25;
     qs('guess-value').textContent = '25';
   }
+  if (phaseChanged) state.lastSoundSec = null;
 
   switch (room.phase) {
     case 'countdown': {
@@ -1313,7 +1711,7 @@ function renderGame(room) {
       qs('guess-controls').style.display = 'none';
       qs('price-reveal-card').style.display = 'none';
       qs('score-table').innerHTML = '';
-      if (phaseChanged) burstConfetti(20);
+      if (phaseChanged) { burstConfetti(20); Audio.reveal(); }
       break;
     }
     case 'scoring': {
@@ -1331,7 +1729,7 @@ function renderGame(room) {
         qs('price-reveal-amount').classList.remove('fake');
       }
       renderScoreTable(room, product);
-      if (phaseChanged) burstConfetti(40);
+      if (phaseChanged) { burstConfetti(40); Audio.kaChing(); }
       break;
     }
   }
@@ -1379,6 +1777,8 @@ function renderScoreTable(room, product) {
 // ----- END SCREEN -----
 function renderEnd(room) {
   showScreen('end');
+  const phaseChanged = state.lastSeenPhase !== room.phase;
+  state.lastSeenPhase = room.phase;
   const players = Object.entries(room.players)
     .map(([uid, p]) => ({ uid, p }))
     .sort((a, b) => b.p.score - a.p.score);
@@ -1413,18 +1813,24 @@ function renderEnd(room) {
     if (prod.isFake) continue;
     const a = document.createElement('a');
     a.className = 'affiliate-row';
-    a.href = buildAffiliateUrl(prod.asin);
+    a.href = buildAffiliateUrl(prod);
     a.target = '_blank';
     a.rel = 'noopener sponsored';
+    const thumbHtml = prod.imageUrl
+      ? `<img src="${prod.imageUrl}" alt="" style="width:100%; height:100%; object-fit:cover; border-radius:6px;" />`
+      : prod.emoji;
     a.innerHTML = `
-      <div class="affiliate-thumb">${prod.emoji}</div>
+      <div class="affiliate-thumb">${thumbHtml}</div>
       <div class="affiliate-title">${prod.fullTitle}</div>
       <div class="affiliate-cta">View →</div>
     `;
     strip.appendChild(a);
   }
 
-  burstConfetti(60);
+  if (phaseChanged) {
+    burstConfetti(60);
+    Audio.matchEnd();
+  }
 
   // Show "Play Again" only to host
   qs('btn-play-again').style.display = isHost(room) ? '' : 'none';
@@ -1481,14 +1887,23 @@ function uiTick() {
     const pill = qs('timer-pill');
     pill.textContent = sec;
     pill.classList.toggle('urgent', sec <= 3);
+    // Urgent ticks for last 3 seconds
+    if (sec !== state.lastSoundSec) {
+      state.lastSoundSec = sec;
+      if (sec <= 3 && sec > 0) Audio.urgentTick();
+    }
   } else if (phase === 'countdown') {
-    // Re-render countdown numbers
     const product = state.products[room.productIndex];
     const remaining = Math.max(0, PHASE_TIMINGS.countdown - (Date.now() - room.phaseStartedAt));
     const n = Math.ceil(remaining / 1000);
     qs('product-title').innerHTML = `<span class="redacted-block">GET READY... ${n}</span>`;
     qs('timer-pill').textContent = n;
     qs('timer-pill').classList.remove('urgent');
+    // Countdown beeps on each second tick
+    if (n !== state.lastSoundSec) {
+      state.lastSoundSec = n;
+      if (n > 0) Audio.countdownBeep();
+    }
   } else {
     qs('timer-pill').textContent = '—';
     qs('timer-pill').classList.remove('urgent');
