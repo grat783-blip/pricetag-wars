@@ -937,7 +937,6 @@ const Audio = {
     });
   }
 };
-Audio.setMuted(Audio.muted); // sync UI with persisted state on load
 
 // ----- MUSIC ENGINE (procedural background loops) -----
 // Note frequencies (C major) — same scale across both tracks for cohesion
@@ -1045,6 +1044,9 @@ const Music = {
     if (this.gain) this.gain.gain.value = m ? 0 : 0.06;
   }
 };
+
+// Now that both Audio and Music are defined, sync UI state from persisted mute setting
+Audio.setMuted(Audio.muted);
 
 // ----- BOOT -----
 async function boot() {
