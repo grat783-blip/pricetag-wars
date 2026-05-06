@@ -1,0 +1,54 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomId": {
+        ".read": "$roomId.length === 4",
+        ".write": "$roomId.length === 4",
+        ".validate": "newData.hasChildren(['phase', 'players']) || !newData.exists()",
+        "phase": {
+          ".validate": "newData.isString() && newData.val().length <= 16"
+        },
+        "phaseStartedAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "roundIndex": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() < 100"
+        },
+        "productIndex": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() < 1000"
+        },
+        "productOrder": {
+          ".validate": "newData.hasChildren()"
+        },
+        "hostUid": {
+          ".validate": "newData.isString() && newData.val().length <= 64"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "players": {
+          "$uid": {
+            "name": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 32"
+            },
+            "score": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() < 100000"
+            },
+            "guess": {
+              ".validate": "newData.val() === null || (newData.isNumber() && newData.val() >= 0 && newData.val() <= 10000)"
+            },
+            "lockedAt": {
+              ".validate": "newData.val() === null || newData.isNumber()"
+            },
+            "isBot": {
+              ".validate": "newData.isBoolean()"
+            },
+            "joinedAt": {
+              ".validate": "newData.isNumber()"
+            }
+          }
+        }
+      }
+    }
+  }
+}
